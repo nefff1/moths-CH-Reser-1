@@ -1,10 +1,10 @@
-# Five decades of trapping reveal effects of season, weather and underlying environmental variables on moth abundance, richness and biomass
+# Moth communities are shaped by season, weather, elevation and landscape composition
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14439275.svg)](https://doi.org/10.5281/zenodo.14439275)
 
 This repository contains codes and some data that were used in the analyses for the manuscript:
 
-Neff F, Chittaro Y, Korner-Nievergelt F, Litsios G, Rey E, Knop E. **Five decades of trapping reveal effects of season, weather and underlying environmental variables on moth abundance, richness and biomass.**
+Neff F, Chittaro Y, Korner-Nievergelt F, Litsios G, Rey E, Knop E. **Moth communities are shaped by season, weather, elevation and landscape composition.**
 
 The study is based on a vast moth community dataset from Switzerland collected by Dr. Ladislaus Rezbanyai-Reser.
 

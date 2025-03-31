@@ -11,6 +11,7 @@ library(bayestestR)
 library(mgcv)
 library(lubridate)
 library(cowplot)
+library(fields)
 
 # ... set global parameters ####################################################
 ################################################################################.
@@ -28,6 +29,7 @@ v_covlabels <- c(height = "Elevation (m)",yday = "Day of the year",
                  traptype = "Trap type", bulbtype = "Lamp type", 
                  n_trap = "Number of traps", 
                  sample_previous = "Sampling in previous night",
+                 simult_operation = "Simultaneous operation",
                  active_hours = "Hours active",
                  prop_forest_500 = "Prop. forests",
                  prop_grassland_500 = "Prop. grasslands",
@@ -39,6 +41,7 @@ v_covlabels_short <- c(height = "Elevation",
                        traptype = "Trap type", bulbtype = "Lamp type", 
                        n_trap = "Nr. of traps", 
                        sample_previous = "Sampl. prev. night",
+                       simult_operation = "Sim. operation",
                        active_hours = "Hrs. active",
                        gr = "Spat-temp. cluster", trap_ID = "Site ID",
                        prop_forest_500 = "Prop. forests",
@@ -321,19 +324,8 @@ f_pred_smooths <-  function(fit, data, l_data, terms, scalings, hours_sel){
   l_out
 }
 
-f_pred_fixed_diff <- function(fit, data, scalings, formula = NULL) {
-  
-  if (is.null(formula)){
-    formula <- response ~ A * height + s(yday) + P_2day + T_2day +
-      C(traptype, "contr.sum") +
-      C(bulbtype, "contr.sum") +
-      n_trap +
-      C(sample_previous, "contr.sum") +
-      (1 | spattemp_cluster) +
-      (1 | LOC) +
-      (1 | night_ID) +
-      (1 | trap_ID_A)
-  }
+f_pred_fixed_diff <- function(fit, data, scalings, formula) {
+
   
   terms <- brmsterms(formula)
   
@@ -485,21 +477,9 @@ f_pred_fixed_diff <- function(fit, data, scalings, formula = NULL) {
   d_out
 }
 
-f_pred_fixed_diff_specific <- function(fit, data, scalings, formula = NULL,
+f_pred_fixed_diff_specific <- function(fit, data, scalings, formula,
                                        var_i, diff_or) {
-  
-  if (is.null(formula)){
-    formula <- response ~ A * height + s(yday) + P_2day + T_2day +
-      C(traptype, "contr.sum") +
-      C(bulbtype, "contr.sum") +
-      n_trap +
-      C(sample_previous, "contr.sum") +
-      (1 | spattemp_cluster) +
-      (1 | LOC) +
-      (1 | night_ID) +
-      (1 | trap_ID_A)
-  }
-  
+
   terms <- brmsterms(formula)
   
   mm_full <- model.matrix(terms$dpars$mu$fe, data = data)[, -1]
@@ -591,19 +571,70 @@ f_pred_fixed_diff_specific <- function(fit, data, scalings, formula = NULL,
   
 }
 
-f_pred_smooths_diff <- function(fit, data, scalings, formula = NULL) {
+f_pred_PTint_diff <- function(fit, data, scalings, formula, quantiles_T) {
   
-  if (is.null(formula)){
-    formula <- response ~ A * height + s(yday) + P_2day + T_2day +
-      C(traptype, "contr.sum") +
-      C(bulbtype, "contr.sum") +
-      n_trap +
-      C(sample_previous, "contr.sum") +
-      (1 | spattemp_cluster) +
-      (1 | LOC) +
-      (1 | night_ID) +
-      (1 | trap_ID_A)
+  terms <- brmsterms(formula)
+  
+  mm_full <- model.matrix(terms$dpars$mu$fe, data = data)[, -1]
+  
+  d_out <- data.frame()
+  for (T_i in quantile(data$T_2day, quantiles_T)){
+    d_pred <- data.frame(T_2day = T_i) |> 
+      mutate(T_2day_C = T_2day - mean(data$T_2day),
+             T_2day_OR = T_2day * scalings$sd[scalings$var == "T_2day"] +
+               scalings$mean[scalings$var == "T_2day"]) |> 
+      expand_grid(data.frame(P_2day = min(data$P_2day) + 
+                               diff(range(data$P_2day)) * c(.25, .75)) %>% 
+                    mutate(P_2day_C = P_2day - mean(data$P_2day),
+                           P_2day_OR = P_2day * scalings$sd[scalings$var == "P_2day"] +
+                             scalings$mean[scalings$var == "P_2day"]))
+    
+    
+    
+    m_pred <- matrix(rep(fit$Intercept, each = nrow(d_pred)), nrow = nrow(d_pred))
+    
+    for (var_i in c("T_2day", "P_2day")){
+      m_pred <- m_pred +
+        matrix(d_pred[, paste0(var_i, "_C"), drop = T]) %*% fit$b[, which(grepl(var_i, colnames(mm_full)) &
+                                                                            !grepl(":", colnames(mm_full)))]
+    }
+    
+    m_pred <- m_pred + 
+      matrix(d_pred %>% 
+               select(ends_with("_C")) %>% 
+               apply(., 1, prod)) %*% fit$b[, which(colnames(mm_full) == "P_2day:T_2day")]
+    
+    c_diff <- apply(m_pred, 2, diff)
+    
+    
+    d_out <- data.frame(diff = c_diff) |> 
+      summarise(estimate_mean = mean(diff),
+                lower_95 = ci(diff, .95)$CI_low,
+                upper_95 = ci(diff, .95)$CI_high,
+                lower_80 = ci(diff, .80)$CI_low,
+                upper_80 = ci(diff, .80)$CI_high,
+                lower_776 = ci(diff, 1 - sqrt(.05))$CI_low,
+                upper_776 = ci(diff, 1 - sqrt(.05))$CI_high,
+                
+                exp_estimate_mean = mean(exp(diff)),
+                exp_lower_95 = ci(exp(diff), .95)$CI_low,
+                exp_upper_95 = ci(exp(diff), .95)$CI_high,
+                exp_lower_80 = ci(exp(diff), .80)$CI_low,
+                exp_upper_80 = ci(exp(diff), .80)$CI_high,
+                exp_lower_776 = ci(exp(diff), 1 - sqrt(.05))$CI_low,
+                exp_upper_776 = ci(exp(diff), 1 - sqrt(.05))$CI_high) |> 
+      mutate(T_2day = T_i,
+             T_2day_or = unique(d_pred$T_2day_OR),
+             diff_P_day_or = diff(d_pred$P_2day_OR)) |> 
+      (\(x) bind_rows(d_out, x))()
   }
+  
+  d_out |> 
+    select(T_2day, T_2day_or, diff_P_day_or, everything())
+}
+
+
+f_pred_smooths_diff <- function(fit, data, scalings, formula) {
   
   terms <- brmsterms(formula)
   
@@ -771,11 +802,12 @@ f_apply_Rhat <- function(fit){
   d_Rhat
 }
 
-f_plot_pred <- function(x, data, response, hours_sel = NULL, line.size = 1){
+f_plot_pred <- function(x, data, response, hours_sel = NULL, line.size = 1,
+                        point.size = .4, covlabels = v_covlabels){
   var_i <- names(x)[1]
   
-  label <- ifelse(var_i %in% names(v_covlabels),
-                  v_covlabels[var_i],
+  label <- ifelse(var_i %in% names(covlabels),
+                  covlabels[var_i],
                   var_i)
   
   if (var_i == "traptype"){
@@ -822,6 +854,44 @@ f_plot_pred <- function(x, data, response, hours_sel = NULL, line.size = 1){
     xlab(label) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
     coord_cartesian(ylim = c(0, NA))
+  
+  if (response == "mass_tot"){
+    p <-  p +
+      scale_y_continuous(trans = log_plus_trans)
+  } else {
+    p <-  p +
+      scale_y_continuous(trans = "log1p")
+  }
+  
+  p
+}
+
+f_plot_P_T <- function(x, data, response,
+                       line.size = .5, point.size = .4){
+  
+  
+  quantiles <- c(0, .25, .5, .75, 1)
+  T_quantiles <- quantile(x$T_2day, quantiles, type = 1)
+  p <-
+    x |> 
+    filter(T_2day %in% T_quantiles) |> 
+    rowwise() |> 
+    mutate(T_cat = paste0("Q-", quantiles[which(T_quantiles == T_2day)] * 100, "%")) |> 
+    ungroup() |> 
+    mutate(T_cat = factor(T_cat, levels = unique(T_cat))) |>
+    ggplot(aes(x = P_2day)) +
+    geom_point(data = data, aes_string(y = response), 
+               alpha = .1, size = point.size, col = "salmon4") + 
+    geom_ribbon(aes(ymin = lower, ymax = upper, group = T_cat), fill = "grey20", alpha = .5) +
+    geom_line(aes(y = estimate, colour = T_cat, group = T_cat), size = line.size)  +
+    ylab("Estimate") +
+    xlab("Precipitation (mm)") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    coord_cartesian(ylim = c(0, NA)) +
+    scale_colour_manual(values = rev(RColorBrewer::brewer.pal(length(quantiles),
+                                                              "RdYlBu")),
+                        name = "Temperature") +
+    guides(color = guide_legend(reverse = TRUE))
   
   if (response == "mass_tot"){
     p <-  p +
@@ -953,11 +1023,12 @@ f_summarytable <- function(mod, formula, covlabels = v_covlabels_short, data,
 
 # abundance --------------------------------------------------------------------.
 l_abu_LU_500 <- f_analysis_LU(formula = abu_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -974,36 +1045,38 @@ l_abu_LU_500 <- f_analysis_LU(formula = abu_tot ~
                                           "Sealed" = "prop_sealed_500"),
                               run_loo = T)
 
-# richness ---------------------------------------------------------------------.
-l_ric_LU_500 <- f_analysis_LU(formula = sric ~
-                                s(yday) + P_2day + T_2day +
-                                C(traptype, "contr.sum") +
-                                C(bulbtype, "contr.sum") +
-                                n_trap +
-                                C(sample_previous, "contr.sum") +
-                                (1 | spattemp_cluster) +
-                                (1 | LOC) +
-                                (1 | night_ID) +
-                                (1 | trap_ID_A),
-                              data_z = d_mod_z,
-                              data = d_mod,
-                              scalings = filter(d_scalings, data == "full"),
-                              family = "zero_inflated_negbinomial",
-                              hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data),
-                              iter = n_iter, seed = 87127,
-                              LU_vars = c("Forest" = "prop_forest_500",
-                                          "Grassland" = "prop_grassland_500",
-                                          "Crop" = "prop_crop_500",
-                                          "Sealed" = "prop_sealed_500"),
-                              run_loo = T)
+# sample-coverage corrected richness -------------------------------------------.
+l_SCcr_LU_500 <- f_analysis_LU(formula = SCcorr_ric ~
+                                 s(yday) + P_2day * T_2day +
+                                 C(traptype, "contr.sum") +
+                                 C(bulbtype, "contr.sum") +
+                                 n_trap +
+                                 C(sample_previous, "contr.sum") +
+                                 C(simult_operation, "contr.sum") +
+                                 (1 | gr) +
+                                 (1 | trap_ID) +
+                                 (1 | night_ID) +
+                                 (1 | trap_ID_A),
+                               data_z = d_mod_z,
+                               data = d_mod,
+                               scalings = filter(d_scalings, data == "full"),
+                               family = "hurdle_gamma",
+                               hours_sel = which(d_mod_z$traptype == "p" & !d_mod_z$estimate),
+                               iter = n_iter, seed = 87127,
+                               LU_vars = c("Forest" = "prop_forest_500",
+                                           "Grassland" = "prop_grassland_500",
+                                           "Crop" = "prop_crop_500",
+                                           "Sealed" = "prop_sealed_500"),
+                               run_loo = T)
 
 # biomass ----------------------------------------------------------------------.
 l_mass_LU_500 <- f_analysis_LU(formula = mass_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                 C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1020,39 +1093,19 @@ l_mass_LU_500 <- f_analysis_LU(formula = mass_tot ~
                                           "Sealed" = "prop_sealed_500"),
                               run_loo = T)
 
-# sample-coverage corrected richness -------------------------------------------.
-l_SCcr_LU_500 <- f_analysis_LU(formula = SCcorr_ric ~
-                                s(yday) + P_2day + T_2day +
-                                C(traptype, "contr.sum") +
-                                C(bulbtype, "contr.sum") +
-                                n_trap +
-                                C(sample_previous, "contr.sum") +
-                                (1 | gr) +
-                                (1 | trap_ID) +
-                                (1 | night_ID) +
-                                (1 | trap_ID_A),
-                              data_z = d_mod_z,
-                              data = d_mod,
-                              scalings = filter(d_scalings, data == "full"),
-                              family = "hurdle_gamma",
-                              hours_sel = which(d_mod_z$traptype == "p" & !d_mod_z$estimate),
-                              iter = n_iter, seed = 134,
-                              LU_vars = c("Forest" = "prop_forest_500",
-                                          "Grassland" = "prop_grassland_500",
-                                          "Crop" = "prop_crop_500",
-                                          "Sealed" = "prop_sealed_500"),
-                              run_loo = T)
+
 
 # ... per overwintering stage ##################################################
 ################################################################################.
 
 # abundance --------------------------------------------------------------------. 
 l_abu_LU_egg <- f_analysis_LU(formula = abu_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1070,11 +1123,12 @@ l_abu_LU_egg <- f_analysis_LU(formula = abu_tot ~
                                           "Sealed" = "prop_sealed_500"))
 
 l_abu_LU_larva <- f_analysis_LU(formula = abu_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1092,11 +1146,12 @@ l_abu_LU_larva <- f_analysis_LU(formula = abu_tot ~
                                           "Sealed" = "prop_sealed_500"))
 
 l_abu_LU_pupa <- f_analysis_LU(formula = abu_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                 C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1114,11 +1169,12 @@ l_abu_LU_pupa <- f_analysis_LU(formula = abu_tot ~
                                           "Sealed" = "prop_sealed_500"))
 
 l_abu_LU_adult <- f_analysis_LU(formula = abu_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1137,12 +1193,13 @@ l_abu_LU_adult <- f_analysis_LU(formula = abu_tot ~
 
 
 # richness ---------------------------------------------------------------------.
-l_ric_LU_egg <- f_analysis_LU(formula = sric ~
-                                s(yday) + P_2day + T_2day +
+l_ric_LU_egg <- f_analysis_LU(formula = SCcorr_ric ~
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1150,7 +1207,7 @@ l_ric_LU_egg <- f_analysis_LU(formula = sric ~
                               data_z = d_mod_hib_z %>% filter(overwintering_stage == "egg"),
                               data = d_mod_hib %>% filter(overwintering_stage == "egg"),
                               scalings = filter(d_scalings, data == "full"),
-                              family = "zero_inflated_negbinomial",
+                              family = "hurdle_gamma",
                               hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "egg"] == "p" &
                                                   d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "egg"]),
                               iter = n_iter, seed = 183456,
@@ -1159,12 +1216,13 @@ l_ric_LU_egg <- f_analysis_LU(formula = sric ~
                                           "Crop" = "prop_crop_500",
                                           "Sealed" = "prop_sealed_500"))
 
-l_ric_LU_larva <- f_analysis_LU(formula = sric ~
-                                s(yday) + P_2day + T_2day +
+l_ric_LU_larva <- f_analysis_LU(formula = SCcorr_ric ~
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1172,7 +1230,7 @@ l_ric_LU_larva <- f_analysis_LU(formula = sric ~
                               data_z = d_mod_hib_z %>% filter(overwintering_stage == "larva"),
                               data = d_mod_hib %>% filter(overwintering_stage == "larva"),
                               scalings = filter(d_scalings, data == "full"),
-                              family = "zero_inflated_negbinomial",
+                              family = "hurdle_gamma",
                               hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "larva"] == "p" &
                                                   d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "larva"]),
                               iter = n_iter, seed = 512344,
@@ -1181,12 +1239,13 @@ l_ric_LU_larva <- f_analysis_LU(formula = sric ~
                                           "Crop" = "prop_crop_500",
                                           "Sealed" = "prop_sealed_500"))
 
-l_ric_LU_pupa <- f_analysis_LU(formula = sric ~
-                                s(yday) + P_2day + T_2day +
+l_ric_LU_pupa <- f_analysis_LU(formula = SCcorr_ric ~
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                 C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1194,7 +1253,7 @@ l_ric_LU_pupa <- f_analysis_LU(formula = sric ~
                               data_z = d_mod_hib_z %>% filter(overwintering_stage == "pupa"),
                               data = d_mod_hib %>% filter(overwintering_stage == "pupa"),
                               scalings = filter(d_scalings, data == "full"),
-                              family = "zero_inflated_negbinomial",
+                              family = "hurdle_gamma",
                               hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "pupa"] == "p" &
                                                   d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "pupa"]),
                               iter = n_iter, seed = 51,
@@ -1203,12 +1262,13 @@ l_ric_LU_pupa <- f_analysis_LU(formula = sric ~
                                           "Crop" = "prop_crop_500",
                                           "Sealed" = "prop_sealed_500"))
 
-l_ric_LU_adult <- f_analysis_LU(formula = sric ~
-                                s(yday) + P_2day + T_2day +
+l_ric_LU_adult <- f_analysis_LU(formula = SCcorr_ric ~
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1216,7 +1276,7 @@ l_ric_LU_adult <- f_analysis_LU(formula = sric ~
                               data_z = d_mod_hib_z %>% filter(overwintering_stage == "adult"),
                               data = d_mod_hib %>% filter(overwintering_stage == "adult"),
                               scalings = filter(d_scalings, data == "full"),
-                              family = "zero_inflated_negbinomial",
+                              family = "hurdle_gamma",
                               hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "adult"] == "p" &
                                                   d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "adult"]),
                               iter = n_iter, seed = 662,
@@ -1227,11 +1287,12 @@ l_ric_LU_adult <- f_analysis_LU(formula = sric ~
 
 # biomass ----------------------------------------------------------------------.
 l_mass_LU_egg <- f_analysis_LU(formula = mass_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                 C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1249,11 +1310,12 @@ l_mass_LU_egg <- f_analysis_LU(formula = mass_tot ~
                                           "Sealed" = "prop_sealed_500"))
 
 l_mass_LU_larva <- f_analysis_LU(formula = mass_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1271,11 +1333,12 @@ l_mass_LU_larva <- f_analysis_LU(formula = mass_tot ~
                                           "Sealed" = "prop_sealed_500"))
 
 l_mass_LU_pupa <- f_analysis_LU(formula = mass_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1293,11 +1356,12 @@ l_mass_LU_pupa <- f_analysis_LU(formula = mass_tot ~
                                           "Sealed" = "prop_sealed_500"))
 
 l_mass_LU_adult <- f_analysis_LU(formula = mass_tot ~
-                                s(yday) + P_2day + T_2day +
+                                s(yday) + P_2day * T_2day +
                                 C(traptype, "contr.sum") +
                                 C(bulbtype, "contr.sum") +
                                 n_trap +
                                 C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                 (1 | spattemp_cluster) +
                                 (1 | LOC) +
                                 (1 | night_ID) +
@@ -1323,11 +1387,12 @@ LU_vars <- c("Forest" = "prop_forest_500",
              "Crop" = "prop_crop_500",
              "Sealed" = "prop_sealed_500")
 formula_full <- response ~ 
-  s(yday) + P_2day + T_2day +
+  s(yday) + P_2day * T_2day +
   C(traptype, "contr.sum") +
   C(bulbtype, "contr.sum") +
   n_trap +
   C(sample_previous, "contr.sum") +
+  C(simult_operation, "contr.sum") +
   (1 | spattemp_cluster) +
   (1 | LOC) +
   (1 | night_ID) +
@@ -1380,6 +1445,25 @@ f_pred_smooths_diff(l_mass_LU_500$fit, d_mod_z, d_scalings |> filter(data == "fu
                        round(exp_upper_95, 2), ")")) |> 
   select(var, diff_or, smry)
 
+# estimates for the temperature-precipitation interaction
+f_pred_PTint_diff(l_abu_LU_500$fit, d_mod_z, d_scalings |> filter(data == "full"),
+                  formula = formula_full, quantiles_T = c(0, .5, 1)) |> 
+  mutate(smry = paste0(round(exp(estimate_mean), 2), " (95%-CI: ",
+                       round(exp_lower_95, 2), "–",
+                       round(exp_upper_95, 2), ")")) |> 
+  select(T_2day_or, diff_P_day_or, smry)
+f_pred_PTint_diff(l_ric_LU_500$fit, d_mod_z, d_scalings |> filter(data == "full"),
+                  formula = formula_full, quantiles_T = c(0, .5, 1)) |> 
+  mutate(smry = paste0(round(exp(estimate_mean), 2), " (95%-CI: ",
+                       round(exp_lower_95, 2), "–",
+                       round(exp_upper_95, 2), ")")) |> 
+  select(T_2day_or, diff_P_day_or, smry)
+f_pred_PTint_diff(l_mass_LU_500$fit, d_mod_z, d_scalings |> filter(data == "full"),
+                  formula = formula_full, quantiles_T = c(0, .5, 1)) |> 
+  mutate(smry = paste0(round(exp(estimate_mean), 2), " (95%-CI: ",
+                       round(exp_lower_95, 2), "–",
+                       round(exp_upper_95, 2), ")")) |> 
+  select(T_2day_or, diff_P_day_or, smry)
 
 # where are the local maxima of the smoothing terms:
 l_abu_LU_500$l_pred_sm$yday |> 
@@ -1420,7 +1504,7 @@ f_pred_fixed_diff_specific(l_abu_LU_500$fit, d_mod_z, d_scalings |> filter(data 
   bind_rows(f_pred_fixed_diff_specific(l_ric_LU_500$fit, d_mod_z, d_scalings |> filter(data == "full"),
                                        formula = formula_full,
                                        var_i = "T_2day", diff_or = 5) |> 
-              mutate(response = "sric")) |> 
+              mutate(response = "SCcorr_ric")) |> 
   bind_rows(f_pred_fixed_diff_specific(l_mass_LU_500$fit, d_mod_z, d_scalings |> filter(data == "full"),
                                        formula = formula_full,
                                        var_i = "T_2day", diff_or = 5) |> 
@@ -1493,7 +1577,7 @@ f_pred_fixed_diff(l_abu_LU_500$fit, d_mod_z, d_scalings |>
                                             formula = formula_full)) |> 
               mutate(response = "Biomass (g)")) |>
   filter(var %in% c('prop_forest_500', 'prop_grassland_500', 'prop_crop_500',
-                    'prop_sealed_500', 'P_2day', 'T_2day', 'height')) |> 
+                    'prop_sealed_500', 'T_2day', 'height')) |> 
   mutate(exp_estimate_mean = exp(estimate_mean),
          diff_or = round(diff_or, 3),
          var = recode(var, !!! v_covlabels),
@@ -1510,7 +1594,7 @@ f_pred_fixed_diff(l_abu_LU_500$fit, d_mod_z, d_scalings |>
 
 # abundance --------------------------------------------------------------------.
 l_plots_cov1_abu <- c(l_abu_LU_500$l_pred_fe, l_abu_LU_500$l_pred_sm) %>% 
-  keep(names(.) %in% c("P_2day", "T_2day", "yday")) %>%
+  keep(names(.) %in% c("T_2day", "yday")) %>%
   map(f_plot_pred, data = d_mod, response = "abu_tot", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
@@ -1542,6 +1626,19 @@ p$layers <- p$layers[c(1,
                        seq(2, length(p$layers) - 1))]
 l_plots_cov1_abu$yday <- p
 
+l_plots_cov1_abu <- c(l_plots_cov1_abu,
+                      P_2day = list(f_plot_P_T(l_abu_LU_500$l_pred_fe$`P_2day:T_2day`,
+                                               data = d_mod, response = "abu_tot", line.size = .75)))
+
+l_plots_cov1_abu$P_2day <- l_plots_cov1_abu$P_2day +
+  theme(legend.position = c(0.45, 1),
+        legend.justification = c(-.1, .9),
+        legend.background = element_rect(colour = NA, 
+                                         fill = alpha("white", .5)),
+        legend.key.height = unit(.25, "cm"),
+        legend.title = element_text(size = v_textsize["axis.text"]),
+        legend.text = element_text(size = v_textsize["additional.text"]))
+
 
 l_plots_cov1_abu <- lapply(l_plots_cov1_abu,
                            \(x) x +
@@ -1557,7 +1654,7 @@ l_plots_cov1_abu[c("P_2day", "T_2day")] <-
                  axis.text.y = element_blank()))
 
 l_plots_cov1_abu <- 
-  lapply(l_plots_cov1_abu[c("yday", "P_2day", "T_2day")],
+  lapply(l_plots_cov1_abu[c("yday", "T_2day", "P_2day")],
          \(x) x + 
            theme(axis.title.x = element_blank(),
                  axis.text.x = element_blank()))
@@ -1568,8 +1665,8 @@ grid_abu <- plot_grid(plotlist = l_plots_cov1_abu,
 
 # richness ---------------------------------------------------------------------.
 l_plots_cov1_ric <- c(l_ric_LU_500$l_pred_fe, l_ric_LU_500$l_pred_sm) %>% 
-  keep(names(.) %in% c("P_2day", "T_2day", "yday")) %>%
-  map(f_plot_pred, data = d_mod, response = "sric", line.size = .75, 
+  keep(names(.) %in% c("T_2day", "yday")) %>%
+  map(f_plot_pred, data = d_mod, response = "SCcorr_ric", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
 p <-
@@ -1593,14 +1690,19 @@ p$layers <- p$layers[c(1,
                        seq(2, length(p$layers) - 1))]
 l_plots_cov1_ric$yday <- p
 
+l_plots_cov1_ric <- c(l_plots_cov1_ric,
+                       P_2day = list(f_plot_P_T(l_ric_LU_500$l_pred_fe$`P_2day:T_2day`,
+                                                data = d_mod, response = "SCcorr_ric", line.size = .75) +
+                                       theme(legend.position = "none")))
+
 
 l_plots_cov1_ric <- lapply(l_plots_cov1_ric,
                            \(x) x +
                              theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                    axis.text = element_text(size = v_textsize["axis.text"])) +
                              labs(y = "Richness")+ 
-                             scale_y_continuous(breaks = c(0, 10, 100), 
-                                                labels = c("0", "10", "    100"), # for layout of the final plot
+                             scale_y_continuous(breaks = c(0, 10, 100, 1000), 
+                                                labels = c("0", "10", "100", "  1000"), # for layout of the final plot
                                                 trans = "log1p"))
 
 l_plots_cov1_ric[c("P_2day", "T_2day")] <- 
@@ -1610,7 +1712,7 @@ l_plots_cov1_ric[c("P_2day", "T_2day")] <-
                  axis.text.y = element_blank()))
 
 l_plots_cov1_ric <- 
-  lapply(l_plots_cov1_ric[c("yday", "P_2day", "T_2day")],
+  lapply(l_plots_cov1_ric[c("yday", "T_2day", "P_2day")],
          \(x) x + 
            theme(axis.title.x = element_blank(),
                  axis.text.x = element_blank()))
@@ -1621,7 +1723,7 @@ grid_ric <- plot_grid(plotlist = l_plots_cov1_ric,
 
 # biomass ----------------------------------------------------------------------.
 l_plots_cov1_mass <- c(l_mass_LU_500$l_pred_fe, l_mass_LU_500$l_pred_sm) %>% 
-  keep(names(.) %in% c("P_2day", "T_2day", "yday")) %>%
+  keep(names(.) %in% c("T_2day", "yday")) %>%
   map(f_plot_pred, data = d_mod, response = "mass_tot", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
@@ -1646,6 +1748,10 @@ p$layers <- p$layers[c(1,
                        seq(2, length(p$layers) - 1))]
 l_plots_cov1_mass$yday <- p
 
+l_plots_cov1_mass <- c(l_plots_cov1_mass,
+                       P_2day = list(f_plot_P_T(l_mass_LU_500$l_pred_fe$`P_2day:T_2day`,
+                                                data = d_mod, response = "mass_tot", line.size = .75) +
+                                       theme(legend.position = "none")))
 
 l_plots_cov1_mass <- lapply(l_plots_cov1_mass,
                             \(x) x +
@@ -1663,7 +1769,7 @@ l_plots_cov1_mass[c("P_2day", "T_2day")] <-
                  axis.text.y = element_blank()))
 
 # change order
-l_plots_cov1_mass <- l_plots_cov1_mass[c("yday", "P_2day", "T_2day")]
+l_plots_cov1_mass <- l_plots_cov1_mass[c("yday", "T_2day", "P_2day")]
 
 grid_mass <- plot_grid(plotlist = l_plots_cov1_mass,
                        nrow = 1, rel_widths = c(1.8, 1, 1),
@@ -1691,12 +1797,12 @@ p_abu_elev <- l_abu_LU_500$l_pred_sm$height %>%
         axis.text = element_text(size = v_textsize["axis.text"])) +
   scale_y_continuous(breaks = c(0, 10, 100, 1000, 10000), trans = "log1p")
 p_ric_elev <- l_ric_LU_500$l_pred_sm$height %>% 
-  f_plot_pred(data = d_mod, response = "sric", line.size = .75, 
+  f_plot_pred(data = d_mod, response = "SCcorr_ric", line.size = .75, 
               hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data)) +
   labs(y = "Richness") + 
   theme(axis.title = element_text(size = v_textsize["axis.title"]),
         axis.text = element_text(size = v_textsize["axis.text"])) +
-  scale_y_continuous(breaks = c(0, 10, 100), 
+  scale_y_continuous(breaks = c(0, 10, 100, 1000), 
                      trans = "log1p")
 p_mass_elev <- l_mass_LU_500$l_pred_sm$height %>% 
   f_plot_pred(data = d_mod, response = "mass_tot", line.size = .75, 
@@ -1750,7 +1856,7 @@ grid_abu <- plot_grid(plotlist = l_plots_LU_abu,
 # richness ---------------------------------------------------------------------.
 l_plots_LU_ric <- c(l_ric_LU_500$l_pred_fe, l_ric_LU_500$l_pred_sm) %>% 
   keep(grepl("prop_", names(.))) %>%
-  map(f_plot_pred, data = d_mod, response = "sric", line.size = .75, 
+  map(f_plot_pred, data = d_mod, response = "SCcorr_ric", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
 
@@ -1759,8 +1865,8 @@ l_plots_LU_ric <- lapply(l_plots_LU_ric,
                            theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                  axis.text = element_text(size = v_textsize["axis.text"])) +
                            labs(y = "Richness")+ 
-                           scale_y_continuous(breaks = c(0, 10, 100), 
-                                              labels = c("0", "10", "    100"), # for layout of the final plot
+                           scale_y_continuous(breaks = c(0, 10, 100, 1000), 
+                                              labels = c("0", "10", "100", "  1000"), # for layout of the final plot
                                               trans = "log1p"))
 
 l_plots_LU_ric[2:4] <- 
@@ -1820,11 +1926,12 @@ ggsave(p, file = "Output/Figures/LU_comb.pdf",
 # run models and also export random effects
 
 l_abu_LU_500_R <- f_analysis_LU(formula = abu_tot ~
-                                  s(yday) + P_2day + T_2day +
+                                  s(yday) + P_2day * T_2day +
                                   C(traptype, "contr.sum") +
                                   C(bulbtype, "contr.sum") +
                                   n_trap +
                                   C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                   (1 | spattemp_cluster) +
                                   (1 | LOC) +
                                   (1 | night_ID) +
@@ -1841,12 +1948,13 @@ l_abu_LU_500_R <- f_analysis_LU(formula = abu_tot ~
                                             "Sealed" = "prop_sealed_500"),
                                 extract_random = T)
 
-l_ric_LU_500_R <- f_analysis_LU(formula = sric ~
-                                  s(yday) + P_2day + T_2day +
+l_ric_LU_500_R <- f_analysis_LU(formula = SCcorr_ric ~
+                                  s(yday) + P_2day * T_2day +
                                   C(traptype, "contr.sum") +
                                   C(bulbtype, "contr.sum") +
                                   n_trap +
                                   C(sample_previous, "contr.sum") +
+                                  C(simult_operation, "contr.sum") +
                                   (1 | spattemp_cluster) +
                                   (1 | LOC) +
                                   (1 | night_ID) +
@@ -1854,7 +1962,7 @@ l_ric_LU_500_R <- f_analysis_LU(formula = sric ~
                                 data_z = d_mod_z,
                                 data = d_mod,
                                 scalings = filter(d_scalings, data == "full"),
-                                family = "zero_inflated_negbinomial",
+                                family = "hurdle_gamma",
                                 hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data),
                                 iter = n_iter, seed = 87127,
                                 LU_vars = c("Forest" = "prop_forest_500",
@@ -1864,11 +1972,12 @@ l_ric_LU_500_R <- f_analysis_LU(formula = sric ~
                                 extract_random = T)
 
 l_mass_LU_500_R <- f_analysis_LU(formula = mass_tot ~
-                                   s(yday) + P_2day + T_2day +
+                                   s(yday) + P_2day * T_2day +
                                    C(traptype, "contr.sum") +
                                    C(bulbtype, "contr.sum") +
                                    n_trap +
                                    C(sample_previous, "contr.sum") +
+                                   C(simult_operation, "contr.sum") +
                                    (1 | spattemp_cluster) +
                                    (1 | LOC) +
                                    (1 | night_ID) +
@@ -1891,11 +2000,12 @@ LU_vars <- c("Forest" = "prop_forest_500",
              "Crop" = "prop_crop_500",
              "Sealed" = "prop_sealed_500")
 formula_full <- response ~
-  s(yday) + P_2day + T_2day +
+  s(yday) + P_2day * T_2day +
   C(traptype, "contr.sum") +
   C(bulbtype, "contr.sum") +
   n_trap +
   C(sample_previous, "contr.sum") +
+  C(simult_operation, "contr.sum") +
   (1 | spattemp_cluster) +
   (1 | LOC) +
   (1 | night_ID) +
@@ -1936,7 +2046,7 @@ d_check_abu <- data.frame(y = d_mod_z$abu_tot,
                        type = "Predictive"))
 
 # richness
-m_mu <- f_mu_s2p1_r4(formula = update(formula_full, sric ~ .),
+m_mu <- f_mu_s2p1_r4(formula = update(formula_full, SCcorr_ric ~ .),
                      fit = l_ric_LU_500_R$fit,
                      data = d_mod_z,
                      hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
@@ -1947,16 +2057,16 @@ sel <- sample(seq_len(ncol(m_mu)), 100)
 for (sel_i in sel){
   out <- c()
   for (y_i in seq_len(nrow(m_mu))){
-    out <- c(out, rnbinom(n = 1,
-                          size = l_ric_LU_500_R$fit$shape[sel_i],
-                          mu = exp(m_mu[y_i, sel_i])) *
-               rbinom(n = 1, size = 1, prob = 1 - l_ric_LU_500_R$fit$zi[sel_i]))
+    out <- c(out, rgamma(n = 1,
+                         shape = l_ric_LU_500_R$fit$shape[sel_i],
+                         rate = l_ric_LU_500_R$fit$shape[sel_i] * exp(-m_mu[y_i, sel_i])) * 
+               rbinom(n = 1, size = 1, prob = 1 - l_ric_LU_500_R$fit$hu[sel_i]))
   }
   m_ysim <- rbind(m_ysim, out)
 }
 
 
-d_check_ric <- data.frame(y = d_mod_z$sric,
+d_check_ric <- data.frame(y = d_mod_z$SCcorr_ric,
                           rep_id = 99999,
                           type = "Empirical") |>
   bind_rows(data.frame(y = c(t(m_ysim)),
@@ -2058,61 +2168,84 @@ ggsave("Output/Figures/Dist_emp_pred_LU.jpeg", width = 240, height = 90,
 # ... Figure S1.7 ##############################################################
 ################################################################################.
 
-l_plots_cov1_SCcr <- c(l_SCcr_LU_500$l_pred_fe, l_SCcr_LU_500$l_pred_sm) %>% 
-  map(f_plot_pred, data = d_mod, response = "SCcorr_ric", line.size = .75, 
-      hours_sel = which(d_mod_z$traptype == "p" & !d_mod_z$estimate))
+d_variogram <- data.frame()
+for (par_i in c("abu", "ric", "mass")){
+  # residuals from code Figure S1.6
+  if (par_i == "abu"){
+    d_target <- d_check_abu
+  } else if (par_i == "ric"){
+    d_target <- d_check_ric
+  } else if (par_i == "mass"){
+    d_target <- d_check_mass
+  }
+  
+  reps <- unique(d_target$rep_id[d_target$type == "Predictive"])
+  
+  for (rep_i in reps){
+    if (par_i == "abu"){
+      d_resid_i <- d_target |> 
+        filter(type == "Predictive") |> 
+        filter(rep_id == rep_i) |> 
+        mutate(abu_tot = d_mod_z$abu_tot,
+               CX = d_mod_z$CX,
+               CY = d_mod_z$CY,
+               resid = y - abu_tot) 
+    } else if (par_i == "ric"){
+      d_resid_i <- d_target |> 
+        filter(type == "Predictive") |> 
+        filter(rep_id == rep_i) |> 
+        mutate(SCcorr_ric = d_mod_z$SCcorr_ric,
+               CX = d_mod_z$CX,
+               CY = d_mod_z$CY,
+               resid = y - SCcorr_ric) 
+    } else if (par_i == "mass"){
+      d_resid_i <- d_target |> 
+        filter(type == "Predictive") |> 
+        filter(rep_id == rep_i) |> 
+        mutate(mass_tot = d_mod_z$mass_tot,
+               CX = d_mod_z$CX,
+               CY = d_mod_z$CY,
+               resid = y - mass_tot) 
+    }
+    
+    variomod_i <- vgram(loc = d_resid_i[,c("CX", "CY")], d_resid_i$resid, 
+                        type = "variogram", dmax = 25000)
+    
+    vgmean_i <- getVGMean(variomod_i, N = 25,
+                          breaks = quantile(range(variomod_i$d[variomod_i$d > 0]),
+                                            seq(0, 1, length.out = 25)))
+    
+    d_variogram <- data.frame(dist = vgmean_i$centers,
+                              variance = vgmean_i$ys,
+                              rep = rep_i,
+                              par = par_i) |> 
+      bind_rows(d_variogram)
+  }
+}
 
+d_variogram |>
+  mutate(dist = dist / 1000,
+         par = factor(par,
+                      levels = c("abu", "SCcr", "mass"),
+                      labels = c("Abundance", "Richness", "Biomass"))) |> 
+  group_by(dist, par) |> 
+  summarise(variance = mean(variance)) |> 
+  ggplot(aes(x = dist, y = variance)) +
+  geom_point() +
+  stat_smooth(method = "loess") +
+  facet_wrap(~ par, scales = "free_y") +
+  labs(x = "Distance (km)", y = "Variance") +
+  scale_y_continuous(limit = c(0, NA), oob = squish) 
 
-l_plots_cov1_SCcr <- lapply(l_plots_cov1_SCcr,
-                            \(x) x +
-                              theme(axis.title = element_text(size = v_textsize["axis.title"]),
-                                    axis.text = element_text(size = v_textsize["axis.text"])) +
-                              labs(y = "Corrected richness")+ 
-                              scale_y_continuous(breaks = c(0, 10, 100, 1000), trans = "log1p"))
-
-l_plots_cov1_SCcr <- l_plots_cov1_SCcr[c("yday", "P_2day", "T_2day", "height",
-                                         "prop_forest_500", "prop_grassland_500", 
-                                         "prop_crop_500", "prop_sealed_500",
-                                         "traptype", "bulbtype", "n_trap", "active_hours",
-                                         "sample_previous")]
-
-l_plots_cov1_SCcr[c("P_2day","T_2day", "height",
-                    "prop_grassland_500", 
-                    "prop_crop_500", "prop_sealed_500",
-                    "bulbtype", "n_trap", "active_hours",
-                    "sample_previous")] <- 
-  lapply(l_plots_cov1_SCcr[c("P_2day","T_2day", "height",
-                             "prop_grassland_500", 
-                             "prop_crop_500", "prop_sealed_500",
-                             "bulbtype", "n_trap", "active_hours",
-                             "sample_previous")],
-         \(x) x + 
-           theme(axis.title.y = element_blank(),
-                 axis.text.y = element_blank()))
-
-
-p <- plot_grid(plot_grid(plotlist = l_plots_cov1_SCcr[c(1:4)],
-                         nrow = 1, rel_widths = c(1.3, 1, 1, 1),
-                         align = "h"),
-               plot_grid(plotlist = l_plots_cov1_SCcr[c(5:8)],
-                         nrow = 1, rel_widths = c(1.3, 1, 1, 1),
-                         align = "h"),
-               plot_grid(plotlist = l_plots_cov1_SCcr[c(9:13)],
-                         nrow = 1, rel_widths = c(1.2, 1, 1, 1, 1),
-                         align = "h"),
-               ncol = 1,
-               rel_heights = c(1, 1, 1.3))
-
-
-ggsave(p, file = "Output/Figures/Results_SCcorr_ric.jpeg", 
-       width = 180, height = 210, units = "mm", dpi = 600)
+ggsave("Output/Figures/Variograms_LU.jpeg", width = 240, height = 90,
+       units = "mm", dpi = 400)
 
 # ... Figure S1.8 ##############################################################
 ################################################################################.
 
 # abundance --------------------------------------------------------------------.
 l_plots_cov2_abu <- c(l_abu_LU_500$l_pred_fe, l_abu_LU_500$l_pred_sm) %>% 
-  keep(names(.) %in% c("traptype", "bulbtype", "n_trap", "active_hours", "sample_previous")) %>%
+  keep(names(.) %in% c("traptype", "bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")) %>%
   map(f_plot_pred, data = d_mod, response = "abu_tot", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
@@ -2123,8 +2256,8 @@ l_plots_cov2_abu <- lapply(l_plots_cov2_abu,
                              labs(y = "Abundance") + 
                              scale_y_continuous(breaks = c(0, 10, 100, 1000, 10000), trans = "log1p"))
 
-l_plots_cov2_abu[c("bulbtype", "n_trap", "active_hours", "sample_previous")] <- 
-  lapply(l_plots_cov2_abu[c("bulbtype", "n_trap", "active_hours", "sample_previous")],
+l_plots_cov2_abu[c("bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")] <- 
+  lapply(l_plots_cov2_abu[c("bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")],
          \(x) x + 
            theme(axis.title.y = element_blank(),
                  axis.text.y = element_blank()))
@@ -2136,14 +2269,14 @@ l_plots_cov2_abu <- lapply(l_plots_cov2_abu,
 
 grid_abu_sup <- plot_grid(plotlist = l_plots_cov2_abu[c("traptype", "bulbtype",
                                                         "n_trap", "active_hours", 
-                                                        "sample_previous")],
-                          nrow = 1, rel_widths = c(1.2, 1, 1, 1, 1),
+                                                        "sample_previous", "simult_operation")],
+                          nrow = 1, rel_widths = c(1.4, 1, 1, 1, 1, 1),
                           align = "h")
 
 # richness ---------------------------------------------------------------------.
 l_plots_cov2_ric <- c(l_ric_LU_500$l_pred_fe, l_ric_LU_500$l_pred_sm) %>% 
-  keep(names(.) %in% c("traptype", "bulbtype", "n_trap", "active_hours", "sample_previous")) %>%
-  map(f_plot_pred, data = d_mod, response = "sric", line.size = .75, 
+  keep(names(.) %in% c("traptype", "bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")) %>%
+  map(f_plot_pred, data = d_mod, response = "SCcorr_ric", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
 l_plots_cov2_ric <- lapply(l_plots_cov2_ric,
@@ -2151,12 +2284,12 @@ l_plots_cov2_ric <- lapply(l_plots_cov2_ric,
                              theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                    axis.text = element_text(size = v_textsize["axis.text"])) +
                              labs(y = "Richness") + 
-                             scale_y_continuous(breaks = c(0, 10, 100), 
-                                                labels = c("0", "10", "    100"), # for layout of the final plot
+                             scale_y_continuous(breaks = c(0, 10, 100, 1000), 
+                                                labels = c("0", "10", "100", "  1000"), # for layout of the final plot
                                                 trans = "log1p"))
 
-l_plots_cov2_ric[c("bulbtype", "n_trap", "active_hours", "sample_previous")] <- 
-  lapply(l_plots_cov2_ric[c("bulbtype", "n_trap", "active_hours", "sample_previous")],
+l_plots_cov2_ric[c("bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")] <- 
+  lapply(l_plots_cov2_ric[c("bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")],
          \(x) x + 
            theme(axis.title.y = element_blank(),
                  axis.text.y = element_blank()))
@@ -2169,13 +2302,13 @@ l_plots_cov2_ric <- lapply(l_plots_cov2_ric,
 
 grid_ric_sup <- plot_grid(plotlist = l_plots_cov2_ric[c("traptype", "bulbtype",
                                                         "n_trap", "active_hours", 
-                                                        "sample_previous")],
-                          nrow = 1, rel_widths = c(1.2, 1, 1, 1, 1),
+                                                        "sample_previous", "simult_operation")],
+                          nrow = 1, rel_widths = c(1.4, 1, 1, 1, 1, 1),
                           align = "h")
 
 # biomass ----------------------------------------------------------------------.
 l_plots_cov2_mass <- c(l_mass_LU_500$l_pred_fe, l_mass_LU_500$l_pred_sm) %>% 
-  keep(names(.) %in% c("traptype", "bulbtype", "n_trap", "active_hours", "sample_previous")) %>%
+  keep(names(.) %in% c("traptype", "bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")) %>%
   map(f_plot_pred, data = d_mod, response = "mass_tot", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
@@ -2188,8 +2321,8 @@ l_plots_cov2_mass <- lapply(l_plots_cov2_mass,
                                                  labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
                                                  trans = log_plus_trans))
 
-l_plots_cov2_mass[c("bulbtype", "n_trap", "active_hours", "sample_previous")] <- 
-  lapply(l_plots_cov2_mass[c("bulbtype", "n_trap", "active_hours", "sample_previous")],
+l_plots_cov2_mass[c("bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")] <- 
+  lapply(l_plots_cov2_mass[c("bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")],
          \(x) x + 
            theme(axis.title.y = element_blank(),
                  axis.text.y = element_blank()))
@@ -2197,8 +2330,8 @@ l_plots_cov2_mass[c("bulbtype", "n_trap", "active_hours", "sample_previous")] <-
 
 grid_mass_sup <- plot_grid(plotlist = l_plots_cov2_mass[c("traptype", "bulbtype",
                                                           "n_trap", "active_hours", 
-                                                          "sample_previous")],
-                           nrow = 1, rel_widths = c(1.2, 1, 1, 1, 1),
+                                                          "sample_previous", "simult_operation")],
+                           nrow = 1, rel_widths = c(1.4, 1, 1, 1, 1, 1),
                            align = "h")
 
 
@@ -2211,15 +2344,16 @@ p <- plot_grid(grid_abu_sup,
 ggsave(p, file = "Output/Figures/Covariates_sup_comb.pdf",
        width = 180, height = 210, units = "mm", dpi = 600)
 
-# ... Table S3 #################################################################
+# ... Table S1.3 ###############################################################
 ################################################################################.
 
 formula <- response ~ 
-  s(yday) + P_2day + T_2day +
+  s(yday) + P_2day * T_2day +
   C(traptype, "contr.sum") +
   C(bulbtype, "contr.sum") +
   n_trap +
   C(sample_previous, "contr.sum") +
+  C(simult_operation, "contr.sum") +
   (1 | spattemp_cluster) +
   (1 | LOC) +
   (1 | night_ID) +

@@ -327,6 +327,9 @@ d_mod <-
                                                LOC, samplingpair), sep = "|"),
          sample_previous = as.factor(sample_previous),
          A_id = A) %>% # not to be transformed
+  group_by(night_ID) |>
+  mutate(simult_operation = as.factor(ifelse(n_distinct(LOC) > 1, "yes", "no"))) |>
+  ungroup() %>%
   left_join(d_sites %>% select(LOC, height, height_cat), 
             by = "LOC", relationship = "many-to-one")
 
@@ -446,8 +449,35 @@ d_mod_hib <-
                                                LOC, samplingpair), sep = "|"),
          sample_previous = as.factor(sample_previous),
          A_id = A) %>% # not to be transformed
+  group_by(night_ID) |>
+  mutate(simult_operation = as.factor(ifelse(n_distinct(LOC) > 1, "yes", "no"))) |>
+  ungroup() %>%
   left_join(d_sites %>% select(LOC, height, height_cat), by = "LOC",
             relationship = "many-to-one")
+
+d_SCcorr_tmp <-
+  d_moths |>
+  mutate(ID = paste(A, LOC, yday, overwintering_stage, sep = "___")) |>
+  group_by(ID) |>
+  filter(sum(ADU) > 0) |>
+  ungroup() |>
+  (\(x) split(x, x$ID))() |>
+  (\(x) mclapply(x, f_iNEXT_prepare))() |>
+  iNEXT(endpoint = 1) |>
+  magrittr::extract2("AsyEst") |>
+  filter(Diversity == "Species richness") |>
+  select(Assemblage, SCcorr_ric = Estimator) |>
+  separate(Assemblage, c("A", "LOC", "yday", "overwintering_stage"), sep = "___") |>
+  mutate(across(c(A, yday), ~ as.numeric(.)))
+
+d_mod_hib <- d_mod_hib |>
+  left_join(d_SCcorr_tmp,
+            by = c("A", "LOC", "yday", "overwintering_stage"),
+            relationship = "one-to-one") |>
+  mutate(SCcorr_ric = ifelse(is.na(SCcorr_ric), 0, SCcorr_ric))
+
+rm(d_SCcorr_tmp)
+
 
 d_mod_hib_z <- d_mod_hib %>%
   mutate(across(c(!! enquo(sel_pars)),

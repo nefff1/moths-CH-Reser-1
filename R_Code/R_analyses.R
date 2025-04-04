@@ -2168,81 +2168,6 @@ ggsave("Output/Figures/Dist_emp_pred_LU.jpeg", width = 240, height = 90,
 # ... Figure S1.7 ##############################################################
 ################################################################################.
 
-d_variogram <- data.frame()
-for (par_i in c("abu", "ric", "mass")){
-  # residuals from code Figure S1.6
-  if (par_i == "abu"){
-    d_target <- d_check_abu
-  } else if (par_i == "ric"){
-    d_target <- d_check_ric
-  } else if (par_i == "mass"){
-    d_target <- d_check_mass
-  }
-  
-  reps <- unique(d_target$rep_id[d_target$type == "Predictive"])
-  
-  for (rep_i in reps){
-    if (par_i == "abu"){
-      d_resid_i <- d_target |> 
-        filter(type == "Predictive") |> 
-        filter(rep_id == rep_i) |> 
-        mutate(abu_tot = d_mod_z$abu_tot,
-               CX = d_mod_z$CX,
-               CY = d_mod_z$CY,
-               resid = y - abu_tot) 
-    } else if (par_i == "ric"){
-      d_resid_i <- d_target |> 
-        filter(type == "Predictive") |> 
-        filter(rep_id == rep_i) |> 
-        mutate(SCcorr_ric = d_mod_z$SCcorr_ric,
-               CX = d_mod_z$CX,
-               CY = d_mod_z$CY,
-               resid = y - SCcorr_ric) 
-    } else if (par_i == "mass"){
-      d_resid_i <- d_target |> 
-        filter(type == "Predictive") |> 
-        filter(rep_id == rep_i) |> 
-        mutate(mass_tot = d_mod_z$mass_tot,
-               CX = d_mod_z$CX,
-               CY = d_mod_z$CY,
-               resid = y - mass_tot) 
-    }
-    
-    variomod_i <- vgram(loc = d_resid_i[,c("CX", "CY")], d_resid_i$resid, 
-                        type = "variogram", dmax = 25000)
-    
-    vgmean_i <- getVGMean(variomod_i, N = 25,
-                          breaks = quantile(range(variomod_i$d[variomod_i$d > 0]),
-                                            seq(0, 1, length.out = 25)))
-    
-    d_variogram <- data.frame(dist = vgmean_i$centers,
-                              variance = vgmean_i$ys,
-                              rep = rep_i,
-                              par = par_i) |> 
-      bind_rows(d_variogram)
-  }
-}
-
-d_variogram |>
-  mutate(dist = dist / 1000,
-         par = factor(par,
-                      levels = c("abu", "SCcr", "mass"),
-                      labels = c("Abundance", "Richness", "Biomass"))) |> 
-  group_by(dist, par) |> 
-  summarise(variance = mean(variance)) |> 
-  ggplot(aes(x = dist, y = variance)) +
-  geom_point() +
-  stat_smooth(method = "loess") +
-  facet_wrap(~ par, scales = "free_y") +
-  labs(x = "Distance (km)", y = "Variance") +
-  scale_y_continuous(limit = c(0, NA), oob = squish) 
-
-ggsave("Output/Figures/Variograms_LU.jpeg", width = 240, height = 90,
-       units = "mm", dpi = 400)
-
-# ... Figure S1.8 ##############################################################
-################################################################################.
-
 # abundance --------------------------------------------------------------------.
 l_plots_cov2_abu <- c(l_abu_LU_500$l_pred_fe, l_abu_LU_500$l_pred_sm) %>% 
   keep(names(.) %in% c("traptype", "bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")) %>%
@@ -2343,6 +2268,82 @@ p <- plot_grid(grid_abu_sup,
 
 ggsave(p, file = "Output/Figures/Covariates_sup_comb.pdf",
        width = 180, height = 210, units = "mm", dpi = 600)
+
+# ... Figure S1.8 ##############################################################
+################################################################################.
+
+d_variogram <- data.frame()
+for (par_i in c("abu", "ric", "mass")){
+  # residuals from code Figure S1.6
+  if (par_i == "abu"){
+    d_target <- d_check_abu
+  } else if (par_i == "ric"){
+    d_target <- d_check_ric
+  } else if (par_i == "mass"){
+    d_target <- d_check_mass
+  }
+  
+  reps <- unique(d_target$rep_id[d_target$type == "Predictive"])
+  
+  for (rep_i in reps){
+    if (par_i == "abu"){
+      d_resid_i <- d_target |> 
+        filter(type == "Predictive") |> 
+        filter(rep_id == rep_i) |> 
+        mutate(abu_tot = d_mod_z$abu_tot,
+               CX = d_mod_z$CX,
+               CY = d_mod_z$CY,
+               resid = y - abu_tot) 
+    } else if (par_i == "ric"){
+      d_resid_i <- d_target |> 
+        filter(type == "Predictive") |> 
+        filter(rep_id == rep_i) |> 
+        mutate(SCcorr_ric = d_mod_z$SCcorr_ric,
+               CX = d_mod_z$CX,
+               CY = d_mod_z$CY,
+               resid = y - SCcorr_ric) 
+    } else if (par_i == "mass"){
+      d_resid_i <- d_target |> 
+        filter(type == "Predictive") |> 
+        filter(rep_id == rep_i) |> 
+        mutate(mass_tot = d_mod_z$mass_tot,
+               CX = d_mod_z$CX,
+               CY = d_mod_z$CY,
+               resid = y - mass_tot) 
+    }
+    
+    variomod_i <- vgram(loc = d_resid_i[,c("CX", "CY")], d_resid_i$resid, 
+                        type = "variogram", dmax = 25000)
+    
+    vgmean_i <- getVGMean(variomod_i, N = 25,
+                          breaks = quantile(range(variomod_i$d[variomod_i$d > 0]),
+                                            seq(0, 1, length.out = 25)))
+    
+    d_variogram <- data.frame(dist = vgmean_i$centers,
+                              variance = vgmean_i$ys,
+                              rep = rep_i,
+                              par = par_i) |> 
+      bind_rows(d_variogram)
+  }
+}
+
+d_variogram |>
+  mutate(dist = dist / 1000,
+         par = factor(par,
+                      levels = c("abu", "SCcr", "mass"),
+                      labels = c("Abundance", "Richness", "Biomass"))) |> 
+  group_by(dist, par) |> 
+  summarise(variance = mean(variance)) |> 
+  ggplot(aes(x = dist, y = variance)) +
+  geom_point() +
+  stat_smooth(method = "loess") +
+  facet_wrap(~ par, scales = "free_y") +
+  labs(x = "Distance (km)", y = "Variance") +
+  scale_y_continuous(limit = c(0, NA), oob = squish) 
+
+ggsave("Output/Figures/Variograms_LU.jpeg", width = 240, height = 90,
+       units = "mm", dpi = 400)
+
 
 # ... Table S1.3 ###############################################################
 ################################################################################.

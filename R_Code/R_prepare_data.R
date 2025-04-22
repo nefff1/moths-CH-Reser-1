@@ -304,7 +304,7 @@ d_mod <-
   mutate(visit_ID = paste(LOC, A, yday)) %>%
   left_join(d_mass, by = "Name_std",
             relationship = "many-to-one") |> 
-  mutate(mass_sum = individualCount * mass / 1000) |> 
+  mutate(mass_sum = individualCount * mass / 1000) |> # convert to kg
   group_by(LOC, visit_ID, A, yday) %>%
   summarise(abu_tot = sum(individualCount, na.rm = T),
             sric = length(unique(Name_std)),

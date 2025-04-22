@@ -16,7 +16,7 @@ library(fields)
 # ... set global parameters ####################################################
 ################################################################################.
 
-min_mass <- min(d_mod_z$mass_tot[d_mod_z$mass_tot > 0])
+min_mass <- min(d_mod_z$mass_tot[d_mod_z$mass_tot > 0]) * 1000
 
 log_plus_trans <- scales::trans_new(name = "log_plus",
                                     transform = \(x) log(x + min_mass, 10),
@@ -810,6 +810,13 @@ f_plot_pred <- function(x, data, response, hours_sel = NULL, line.size = 1,
                   covlabels[var_i],
                   var_i)
   
+  if (response == "mass_tot"){
+    x <- x |> 
+      mutate(across(c(lower, upper, estimate), ~ . * 1000))
+    data <- data |> 
+      mutate(mass_tot = mass_tot * 1000)
+  }
+  
   if (var_i == "traptype"){
     x <- x %>% 
       mutate(traptype = factor(traptype, levels = names(v_traplabels),
@@ -869,6 +876,13 @@ f_plot_pred <- function(x, data, response, hours_sel = NULL, line.size = 1,
 f_plot_P_T <- function(x, data, response,
                        line.size = .5, point.size = .4){
   
+  
+  if (response == "mass_tot"){
+    x <- x |> 
+      mutate(across(c(lower, upper, estimate), ~ . * 1000))
+    data <- data |> 
+      mutate(mass_tot = mass_tot * 1000)
+  }
   
   quantiles <- c(0, .25, .5, .75, 1)
   T_quantiles <- quantile(x$T_2day, quantiles, type = 1)
@@ -1739,7 +1753,7 @@ p <-
       bind_rows(l_mass_LU_adult$l_pred_sm$yday %>% 
                   mutate(hib = "a")) %>% 
       mutate(hib = factor(hib, levels = c("e", "l", "p", "a"))),
-    aes(colour = hib, y = estimate),
+    aes(colour = hib, y = estimate * 1000),
     size = .5) +
   scale_colour_manual(values = c("#fbb4b9", "#f768a1", "#c51b8a", "#7a0177"),
                       name = "Hib. stage", guide = F) 
@@ -1757,9 +1771,9 @@ l_plots_cov1_mass <- lapply(l_plots_cov1_mass,
                             \(x) x +
                               theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                     axis.text = element_text(size = v_textsize["axis.text"])) +
-                              labs(y = "Biomass (g)")+ 
-                              scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                                                 labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+                              labs(y = "Biomass (g)") + 
+                              scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                                                 labels = c("0", "0.01", "0.1", "1",  "10", "    100"), # for layout of the final plot
                                                  trans = log_plus_trans))
 
 l_plots_cov1_mass[c("P_2day", "T_2day")] <- 
@@ -1810,9 +1824,9 @@ p_mass_elev <- l_mass_LU_500$l_pred_sm$height %>%
   labs(y = "Biomass (g)") + 
   theme(axis.title = element_text(size = v_textsize["axis.title"]),
         axis.text = element_text(size = v_textsize["axis.text"])) +
-  scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                     labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                     trans = log_plus_trans)
+  scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                     labels = c("0", "0.01", "0.1", "1",  "10", "    100"), # for layout of the final plot
+                     trans = log_plus_trans))
 
 
 p <- plot_grid(p_abu_elev, p_ric_elev, p_mass_elev, nrow = 1, rel_widths = c(1, .94, 1))
@@ -1895,9 +1909,9 @@ l_plots_LU_mass <- lapply(l_plots_LU_mass,
                           \(x) x +
                             theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                   axis.text = element_text(size = v_textsize["axis.text"])) +
-                            labs(y = "Biomass (g)")+ 
-                            scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                                               labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+                            labs(y = "Biomass (g)") + 
+                            scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                                               labels = c("0", "0.01", "0.1", "1",  "10", "    100"), # for layout of the final plot
                                                trans = log_plus_trans))
 
 l_plots_LU_mass[2:4] <- 
@@ -2141,6 +2155,7 @@ p_check_ric <- d_check_ric %>%
 
 # biomass:
 p_check_mass <- d_check_mass %>% 
+  mutate(y = y * 1000) |> 
   ggplot(aes(x = y, y = ..density..)) +
   geom_histogram(data = \(x) filter(x, type == "Empirical"), fill = "grey50", bins = 30) +
   stat_density(aes(group = rep_id, col = type, 
@@ -2242,8 +2257,8 @@ l_plots_cov2_mass <- lapply(l_plots_cov2_mass,
                               theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                     axis.text = element_text(size = v_textsize["axis.text"])) +
                               labs(y = "Biomass (g)") + 
-                              scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                                                 labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+                              scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                                                 labels = c("0", "0.01", "0.1", "1",  "10", "    100"), # for layout of the final plot
                                                  trans = log_plus_trans))
 
 l_plots_cov2_mass[c("bulbtype", "n_trap", "active_hours", "sample_previous", "simult_operation")] <- 
@@ -2306,10 +2321,10 @@ for (par_i in c("abu", "ric", "mass")){
       d_resid_i <- d_target |> 
         filter(type == "Predictive") |> 
         filter(rep_id == rep_i) |> 
-        mutate(mass_tot = d_mod_z$mass_tot,
+        mutate(mass_tot = d_mod_z$mass_tot * 1000,
                CX = d_mod_z$CX,
                CY = d_mod_z$CY,
-               resid = y - mass_tot) 
+               resid =  y * 1000 - mass_tot) 
     }
     
     variomod_i <- vgram(loc = d_resid_i[,c("CX", "CY")], d_resid_i$resid, 

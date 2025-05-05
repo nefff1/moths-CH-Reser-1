@@ -1,10 +1,10 @@
-# Moth communities are shaped by season, weather, elevation and landscape composition
+# Moth communities are shaped by season, weather, elevation, and landscape composition
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14439274.svg)](https://doi.org/10.5281/zenodo.14439274)
 
-This repository contains codes and some data that were used in the analyses for the manuscript:
+This repository contains codes and some data that were used in the analyses for the following publication:
 
-Neff F, Chittaro Y, Korner-Nievergelt F, Litsios G, Rey E, Knop E. **Moth communities are shaped by season, weather, elevation and landscape composition.**
+Neff F, Chittaro Y, Korner-Nievergelt F, Litsios G, Rey E, Knop E. (2025) **Moth communities are shaped by season, weather, elevation, and landscape composition.** Insect Conservation and Diversity. [https://doi.org/10.1111/icad.12835](https://doi.org/10.1111/icad.12835)
 
 The study is based on a vast moth community dataset from Switzerland collected by Dr. Ladislaus Rezbanyai-Reser.
 
